@@ -18,7 +18,7 @@ func main() {
 	var apiHost = "https://drive4.iakl.top"
 	var policyID = "3xtq"
 	var username = "yixinin@outlook.com"
-	var password = "CR3@$0ncr"
+	var password = ""
 	var storage = cloudreve.NewCloudreveBackend(apiHost, policyID, username, password, database)
 	smb.StartSmb(database, storage)
 
