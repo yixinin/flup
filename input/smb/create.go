@@ -1,11 +1,11 @@
 package smb
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -14,6 +14,10 @@ func (s *SMBServer) handleNTCreateAndX(conn net.Conn, data []byte) error {
 	if len(data) < 40 {
 		return errors.New("invalid NT_CREATE_ANDX request")
 	}
+
+	// 解析文件属性判断是否为目录
+	fileAttributes := binary.LittleEndian.Uint32(data[20:24])
+	isDir := (fileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0
 
 	// 解析文件名偏移量
 	fileNameOffset := int(binary.LittleEndian.Uint16(data[33:35]))
@@ -27,63 +31,37 @@ func (s *SMBServer) handleNTCreateAndX(conn net.Conn, data []byte) error {
 		fileNameBuilder.WriteByte(data[i])
 	}
 	fileName := fileNameBuilder.String()
+	fullPath := fmt.Sprintf("%s/%s", s.PathPrefix, fileName)
 
-	// 解析创建选项
-	// createOptions := binary.LittleEndian.Uint32(data[25:29])
-	createDisposition := binary.LittleEndian.Uint32(data[29:33])
-
-	// 构建完整的本地文件路径
-	localPath := filepath.Join(s.SharePath, fileName)
-
-	// 确保目录存在
-	os.MkdirAll(filepath.Dir(localPath), 0755)
-
-	// 处理创建选项
-	var file *os.File
+	// 根据类型调用存储后端创建方法
+	ctx := context.Background()
 	var err error
-
-	switch createDisposition {
-	case FILE_CREATE: // 创建新文件
-		file, err = os.Create(localPath)
-	case FILE_OPEN: // 打开现有文件
-		file, err = os.OpenFile(localPath, os.O_RDWR, 0644)
-	case FILE_OPEN_IF: // 打开或创建
-		if _, err := os.Stat(localPath); os.IsNotExist(err) {
-			file, err = os.Create(localPath)
-		} else {
-			file, err = os.OpenFile(localPath, os.O_RDWR, 0644)
-		}
-	default:
-		file, err = os.Create(localPath)
+	if isDir {
+		err = s.storage.CreateDir(ctx, fullPath)
+	} else {
+		err = s.storage.CreateFile(ctx, fullPath)
 	}
-
 	if err != nil {
 		return s.sendErrorResponse(conn, SMB_COM_NT_CREATE_ANDX, 0x00020002) // 访问被拒绝
 	}
 
-	// 分配文件句柄
-	fid := s.NextFID
-	s.NextFID++
-
-	s.FileHandles[fid] = &FileHandle{
-		FID:      fid,
-		FilePath: localPath,
-		File:     file,
-		IsOpen:   true,
+	// 使用Badger生成唯一FID
+	fid, err := s.db.GenerateFID()
+	if err != nil {
+		return s.sendErrorResponse(conn, SMB_COM_NT_CREATE_ANDX, 0x00020002)
 	}
 
-	return s.sendCreateResponse(conn, fid, localPath)
+	// 存储FID与文件名的映射关系
+	if err := s.db.StoreFIDMapping(fid, fileName); err != nil {
+		return s.sendErrorResponse(conn, SMB_COM_NT_CREATE_ANDX, 0x00020002)
+	}
+
+	return s.sendCreateResponse(conn, fid, fullPath)
 }
 
 // 发送文件创建成功响应
 func (s *SMBServer) sendCreateResponse(conn net.Conn, fid uint16, filePath string) error {
-	fileInfo, err := os.Stat(filePath)
-	if err != nil {
-		return s.sendErrorResponse(conn, SMB_COM_NT_CREATE_ANDX, 0x00000005)
-	}
-
 	response := make([]byte, 0)
-
 	// NetBIOS会话头 (4字节)
 	netbiosHeader := make([]byte, 4)
 
@@ -119,7 +97,7 @@ func (s *SMBServer) sendCreateResponse(conn net.Conn, fid uint16, filePath strin
 	// 文件属性
 	binary.LittleEndian.PutUint32(params[20:24], FILE_ATTRIBUTE_NORMAL)
 	// 文件大小
-	binary.LittleEndian.PutUint64(params[28:36], uint64(fileInfo.Size()))
+	binary.LittleEndian.PutUint64(params[28:36], uint64(0))
 	// 文件权限
 	binary.LittleEndian.PutUint32(params[36:40], 0x0012019F)
 
@@ -132,6 +110,6 @@ func (s *SMBServer) sendCreateResponse(conn net.Conn, fid uint16, filePath strin
 	// 设置NetBIOS消息长度
 	binary.BigEndian.PutUint32(netbiosHeader, uint32(len(response)))
 
-	_, err = conn.Write(append(netbiosHeader, response...))
+	_, err := conn.Write(append(netbiosHeader, response...))
 	return err
 }

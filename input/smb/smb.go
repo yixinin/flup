@@ -1,6 +1,8 @@
 package smb
 
 import (
+	"flup/output"
+	"flup/storage"
 	"fmt"
 	"net"
 )
@@ -14,7 +16,7 @@ func (s *SMBServer) Start(addr string) error {
 	defer listener.Close()
 
 	fmt.Printf("SMB1.0 Server listening on %s\n", addr)
-	fmt.Printf("Share path: %s\n", s.SharePath)
+
 	fmt.Printf("NetBIOS name: %s\n", s.NetBIOSName)
 
 	for {
@@ -29,14 +31,13 @@ func (s *SMBServer) Start(addr string) error {
 	}
 }
 
-func StartSmb() {
+func StartSmb(db *storage.Database, storage output.BackendStorage) {
 	// 配置服务器参数
-	sharePath := "./smbshare"
 	netbiosName := "GOSMBSERVER"
 	listenAddr := ":445"
 
 	// 创建服务器实例
-	server := NewSMBServer(sharePath, netbiosName)
+	server := NewSMBServer(netbiosName, db, storage)
 
 	// 启动服务器
 	if err := server.Start(listenAddr); err != nil {

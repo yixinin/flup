@@ -1,11 +1,12 @@
 package smb
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
-	"io/fs"
+	"flup/output"
 	"net"
-	"os"
+	"path"
 	"time"
 )
 
@@ -17,30 +18,23 @@ func (s *SMBServer) handleFindFirst2(conn net.Conn, data []byte) error {
 
 	// 解析参数
 	fid := binary.LittleEndian.Uint16(data[29:31])
-	searchPatternOffset := int(binary.LittleEndian.Uint16(data[31:33]))
-	informationLevel := binary.LittleEndian.Uint16(data[33:35])
-
-	// 提取搜索模式
-	searchPattern := extractNullTerminatedString(data[searchPatternOffset:])
-
-	// 获取文件句柄对应的目录路径
-	fileHandle, exists := s.FileHandles[fid]
-	if !exists || !fileHandle.IsOpen {
-		return s.sendErrorResponse(conn, 0x0F, 0x00060001) // 无效句柄
+	filename, err := s.db.GetFilenameByFID(fid)
+	if err != nil {
+		return s.sendErrorResponse(conn, 0x0F, 0x00030002)
 	}
-
-	// 枚举目录
-	entries, err := os.ReadDir(fileHandle.FilePath)
+	// 使用存储中间件获取文件列表
+	ctx := context.Background()
+	entries, err := s.storage.ListFiles(ctx, path.Join(s.PathPrefix, filename), "")
 	if err != nil {
 		return s.sendErrorResponse(conn, 0x0F, 0x00030002)
 	}
 
 	// 构建响应
-	return s.sendFindFirst2Response(conn, entries, informationLevel, searchPattern)
+	return s.sendFindFirst2Response(conn, entries)
 }
 
 // 发送FIND_FIRST2响应
-func (s *SMBServer) sendFindFirst2Response(conn net.Conn, entries []fs.DirEntry, infoLevel uint16, pattern string) error {
+func (s *SMBServer) sendFindFirst2Response(conn net.Conn, entries []output.FileInfo) error {
 	response := make([]byte, 0)
 
 	// NetBIOS头
@@ -63,15 +57,15 @@ func (s *SMBServer) sendFindFirst2Response(conn net.Conn, entries []fs.DirEntry,
 
 	// 参数块
 	params := make([]byte, 20)
-	params[0] = 0xFF // AndXCommand
-	params[1] = 0    // AndXReserved
-	binary.LittleEndian.PutUint16(params[2:4], 0) // AndXOffset
-	binary.LittleEndian.PutUint16(params[4:6], 0) // SearchCount
-	binary.LittleEndian.PutUint16(params[6:8], uint16(len(entries))) // EndOfSearch
-	binary.LittleEndian.PutUint16(params[8:10], 0) // EaErrorOffset
-	binary.LittleEndian.PutUint32(params[10:14], 0) // LastModified
-	binary.LittleEndian.PutUint16(params[14:16], 0) // FileDataSize
-	binary.LittleEndian.PutUint16(params[16:18], 0) // SearchCount
+	params[0] = 0xFF                                                   // AndXCommand
+	params[1] = 0                                                      // AndXReserved
+	binary.LittleEndian.PutUint16(params[2:4], 0)                      // AndXOffset
+	binary.LittleEndian.PutUint16(params[4:6], 0)                      // SearchCount
+	binary.LittleEndian.PutUint16(params[6:8], uint16(len(entries)))   // EndOfSearch
+	binary.LittleEndian.PutUint16(params[8:10], 0)                     // EaErrorOffset
+	binary.LittleEndian.PutUint32(params[10:14], 0)                    // LastModified
+	binary.LittleEndian.PutUint16(params[14:16], 0)                    // FileDataSize
+	binary.LittleEndian.PutUint16(params[16:18], 0)                    // SearchCount
 	binary.LittleEndian.PutUint16(params[18:20], uint16(len(entries))) // EndOfSearch
 
 	response = append(response, params...)
@@ -79,17 +73,7 @@ func (s *SMBServer) sendFindFirst2Response(conn net.Conn, entries []fs.DirEntry,
 	// 构建文件信息
 	var fileData []byte
 	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		// 根据信息级别构建不同的文件信息结构
-		if infoLevel == 0x0100 { // SMB_INFO_STANDARD
-			fileData = append(fileData, buildStandardInfo(entry, info)...) 
-		} else { // 默认使用标准信息
-			fileData = append(fileData, buildStandardInfo(entry, info)...) 
-		}
+		fileData = append(fileData, buildStandardInfo(entry)...)
 	}
 
 	// ByteCount
@@ -107,28 +91,38 @@ func (s *SMBServer) sendFindFirst2Response(conn net.Conn, entries []fs.DirEntry,
 }
 
 // 构建标准文件信息结构
-func buildStandardInfo(entry fs.DirEntry, info fs.FileInfo) []byte {
+func buildStandardInfo(entry output.FileInfo) []byte {
 	fileInfo := make([]byte, 48)
 
 	// 文件名称
-	nameBytes := []byte(entry.Name())
+	nameBytes := []byte(entry.Name)
 	nameBytes = append(nameBytes, 0) // null终止
 	fileInfo = append(fileInfo, nameBytes...)
 
 	// 文件属性
 	attrs := uint16(0x20) // 普通文件
-	if entry.IsDir() {
+	if entry.IsDir {
 		attrs = 0x10 // 目录
 	}
 	binary.LittleEndian.PutUint16(fileInfo[0:2], attrs)
 
 	// 最后写入时间
-	binary.LittleEndian.PutUint64(fileInfo[2:10], getSMBTime(info.ModTime()))
+	binary.LittleEndian.PutUint64(fileInfo[2:10], getSMBTimeFromString(entry.UpdatedAt))
 
 	// 文件大小
-	binary.LittleEndian.PutUint32(fileInfo[10:14], uint32(info.Size()))
+	binary.LittleEndian.PutUint32(fileInfo[10:14], uint32(entry.Size))
 
 	return fileInfo
+}
+
+// 从字符串转换时间为SMB格式
+func getSMBTimeFromString(timeStr string) uint64 {
+	// 解析Cloudreve返回的时间字符串
+	t, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		return 0
+	}
+	return getSMBTime(t)
 }
 
 // 转换时间为SMB格式

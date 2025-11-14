@@ -1,9 +1,10 @@
 package smb
 
 import (
+	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
-	"io"
 	"net"
 )
 
@@ -13,38 +14,27 @@ func (s *SMBServer) handleWriteAndX(conn net.Conn, data []byte) error {
 		return errors.New("invalid WRITE_ANDX request")
 	}
 
-	// 解析FID
+	// 解析FID和路径
 	fid := binary.LittleEndian.Uint16(data[29:31])
-
-	// 查找文件句柄
-	fileHandle, exists := s.FileHandles[fid]
-	if !exists || !fileHandle.IsOpen {
-		return s.sendErrorResponse(conn, SMB_COM_WRITE_ANDX, 0x00060001) // 无效句柄
+	filename, err := s.db.GetFilenameByFID(fid)
+	if err != nil {
+		return s.sendErrorResponse(conn, SMB_COM_WRITE_ANDX, 0x00060001)
 	}
 
 	// 解析写入参数
-	offset := binary.LittleEndian.Uint64(data[13:21])
-	dataLength := binary.LittleEndian.Uint16(data[33:35])
 	dataOffset := int(binary.LittleEndian.Uint16(data[35:37]))
-
-	if dataOffset+int(dataLength) > len(data) {
-		return errors.New("invalid write data")
-	}
-
-	// 定位文件指针
-	_, err := fileHandle.File.Seek(int64(offset), io.SeekStart)
-	if err != nil {
-		return s.sendErrorResponse(conn, SMB_COM_WRITE_ANDX, 0x00030002)
-	}
-
-	// 写入数据
+	dataLength := binary.LittleEndian.Uint16(data[33:35])
 	writeData := data[dataOffset : dataOffset+int(dataLength)]
-	bytesWritten, err := fileHandle.File.Write(writeData)
+
+	// 使用存储中间件上传文件
+	ctx := context.Background()
+	err = s.storage.UploadFile(ctx, filename, bytes.NewReader(writeData), int64(dataLength))
 	if err != nil {
 		return s.sendErrorResponse(conn, SMB_COM_WRITE_ANDX, 0x00030002)
 	}
 
-	return s.sendWriteResponse(conn, bytesWritten)
+	// 发送成功响应
+	return s.sendWriteResponse(conn, int(dataLength))
 }
 
 // 发送写入成功响应

@@ -30,8 +30,9 @@ func (s *SMBServer) sendErrorResponse(conn net.Conn, command uint8, status uint3
 	response = append(response, 0) // 错误响应没有参数
 
 	// ByteCount
-	binary.LittleEndian.PutUint16(response[len(response):], 0)
-	response = response[:len(response)+2]
+	byteCount := make([]byte, 2)
+	binary.LittleEndian.PutUint16(byteCount, 0)
+	response = append(response, byteCount...)
 
 	// 设置NetBIOS消息长度
 	binary.BigEndian.PutUint32(netbiosHeader, uint32(len(response)))
@@ -61,7 +62,7 @@ func parseSMBHeader(data []byte) (*SMBHeader, error) {
 		UID:     binary.LittleEndian.Uint16(data[28:30]),
 		MID:     binary.LittleEndian.Uint16(data[30:32]),
 	}
-	copy(header.ProtocolID[:], data[0:4])
+	copy(header.Protocol[:], data[0:4])
 	copy(header.Security[:], data[14:22])
 
 	return header, nil
