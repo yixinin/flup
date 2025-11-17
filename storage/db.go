@@ -260,3 +260,29 @@ func (d *Database) GetAuthTokens() (accessToken, refreshToken string, accessExpi
 
 	return accessToken, refreshToken, accessExpires, refreshExpires, err
 }
+
+// RemoveFID 根据FID移除映射关系
+func (d *Database) RemoveFID(fid uint16) error {
+	filename, err := d.GetFilenameByFID(fid)
+	if err != nil {
+		return err
+	}
+	return d.DeleteFIDMapping(fid, filename)
+}
+
+// UpdateFilenameByFID 更新FID对应的文件名
+func (d *Database) UpdateFilenameByFID(fid uint16, newFilename string) error {
+	// 获取旧文件名
+	oldFilename, err := d.GetFilenameByFID(fid)
+	if err != nil {
+		return err
+	}
+
+	// 删除旧映射
+	if err := d.DeleteFIDMapping(fid, oldFilename); err != nil {
+		return err
+	}
+
+	// 存储新映射
+	return d.StoreFIDMapping(fid, newFilename)
+}

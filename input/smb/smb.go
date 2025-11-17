@@ -39,6 +39,11 @@ func StartSmb(db *storage.Database, storage output.BackendStorage) {
 	// 创建服务器实例
 	server := NewSMBServer(netbiosName, db, storage)
 
+	// 启动UDP服务器
+	if err := server.StartUDPServers(); err != nil {
+		fmt.Printf("启动UDP服务器失败: %v\n", err)
+	}
+
 	// 启动服务器
 	if err := server.Start(listenAddr); err != nil {
 		fmt.Printf("Server error: %v\n", err)

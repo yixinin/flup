@@ -13,9 +13,11 @@ type BackendStorage interface {
 	GetFileInfo(ctx context.Context, path string) (FileInfo, error)
 	DeleteFile(ctx context.Context, path string) error
 	GetFileDownloadURL(ctx context.Context, path string) (string, error)
-	OpenFile(ctx context.Context, path string) (io.ReadCloser, error)
+	OpenFile(ctx context.Context, path string, offset int64, maxBytes int64) (io.ReadCloser, error)
 	CreateFile(ctx context.Context, path string) error
 	CreateDir(ctx context.Context, path string) error
+	Rename(ctx context.Context, oldPath, newPath string) error
+	Delete(ctx context.Context, uris []string, skipSoftDelete bool) error
 }
 
 // FileInfo 文件信息结构体

@@ -23,17 +23,16 @@ func (s *SMBServer) handleReadAndX(conn net.Conn, data []byte) error {
 		return s.sendErrorResponse(conn, SMB_COM_READ_ANDX, 0x00060001) // 无效句柄
 	}
 
+	// 解析读取参数
+	offset := binary.LittleEndian.Uint64(data[13:21])
+	maxCount := binary.LittleEndian.Uint16(data[33:35])
 	// 打开文件
-	file, err := s.storage.OpenFile(context.Background(), filename)
+	file, err := s.storage.OpenFile(context.Background(), filename, int64(offset), int64(maxCount))
 	if err != nil {
 		return s.sendErrorResponse(conn, SMB_COM_READ_ANDX, 0x00030002)
 	}
 
 	defer file.Close()
-
-	// 解析读取参数
-	offset := binary.LittleEndian.Uint64(data[13:21])
-	maxCount := binary.LittleEndian.Uint16(data[33:35])
 
 	// 读取数据
 	readBuffer := make([]byte, maxCount)

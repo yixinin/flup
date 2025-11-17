@@ -16,6 +16,13 @@ const (
 	SMB_COM_CLOSE           = 0x04 // 4
 	SMB_COM_TREE_DISCONNECT = 0x71 // 113
 	SMB_COM_LOGOFF          = 0x74 // 116
+	SMB_COM_FIND_FIRST2     = 0x0F // 15
+	SMB_COM_FIND_NEXT2      = 0x10 // 16
+	SMB_COM_ECHO            = 0x2B // 43
+	SMB_COM_LOCK            = 0x21 // 33
+	SMB_COM_UNLOCK          = 0x22 // 34
+	SMB_COM_DELETE          = 0x06 // 6
+	SMB_COM_RENAME          = 0x07 // 7
 )
 
 // SMB标志和功能
